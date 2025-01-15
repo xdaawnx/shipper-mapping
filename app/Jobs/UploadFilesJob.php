@@ -27,9 +27,11 @@ class UploadFilesJob implements ShouldQueue
     /**
      * Execute the job.
      */
+    private $dir = "Sicepat2025";
+
     public function handle()
     {
-        $effective_date = date('Y-m-d H:i:s', strtotime(date("Y-m-d H:i:s"). ' -7 hours'));
+        $effective_date = date('Y-m-d H:i:s', strtotime(date("Y-m-d H:i:s"). ' +7 hours'));
         $mediaSVCToken = Cache::get("mediasvc:token");
         $pricingSVCToken = Cache::get("pricingsvc:token");
 
@@ -48,7 +50,7 @@ class UploadFilesJob implements ShouldQueue
             Cache::add("mediasvc:token", $data["access_token"], now()->addHours(1)); // Cache for 24 hour
             $pricingSVCToken = $data["access_token"];
         }
-        
+
         $httpClient = new HTTP();
         $multipartData = [
             [
@@ -61,18 +63,18 @@ class UploadFilesJob implements ShouldQueue
             ],
             [
                 'name'     => 'is_public',
-                'contents' => 'false',
+                'contents' => 'true',
             ],
         ];
         $i = 0;
         foreach ($this->files as $key => $file) {
-            if (!file_exists(Storage::path("/docs/output/20241126/{$file}"))) {
+            if (!file_exists(Storage::path("/docs/output/{$this->dir}/{$file}"))) {
                 throw new \Exception("One or more files do not exist.");
             }
             $no = $i == 0 ? "" : $i+1;
             $multipartData[] = [
                 'name'     => 'file'.$no,  // The field name in the API (e.g., file, documents, etc.)
-                'contents' => fopen(Storage::path("/docs/output/20241126/{$file}"), 'r'),
+                'contents' => fopen(Storage::path("/docs/output/{$this->dir}/{$file}"), 'r'),
                 'filename' => $file // Optionally add a custom file name
             ];
             $i++;
@@ -106,12 +108,13 @@ class UploadFilesJob implements ShouldQueue
 
         $afterUploadFiles = $this->afterUploadFilePut($mediaSVCToken, $jobIds, "pricingsvc", "BulkUpdate", []);
         foreach ($afterUploadFiles as $key => $value) {
+            // dd($value->file_name);
             $bulkUpdate = $this->bulkUpdate($pricingSVCToken, $value->url, $effective_date);
-            DB::table('users')
+            DB::table('uploaded_files')
                 ->where('file_name', $value->file_name) // Add conditions
                 ->update([
                     'status' => 'success',
-                    'job_id' => $bulkUpdate->job_id
+                    'job_id' => $bulkUpdate->data["job_id"]
                 ]); 
         }
     }
@@ -194,32 +197,90 @@ class UploadFilesJob implements ShouldQueue
 
     public function bulkUpdate($token = '', $url = "", $effective_date = "")
     {
+        // $data = [
+        //     "entity_id" => 1,
+        //     "entity_type" => "ADMIN",
+        //     "upload_file_url" => $url,
+        //     "effective_date" => $effective_date,   
+        // ];
+        // // var_dump(http_build_query($data));
+        // try {
+        //     $pricingReq = HTTP::
+        //     withOptions([
+        //         'debug' => true,
+        //     ])->withToken($token)
+        //     ->post(
+        //         env('PRICINGSVC_HOST') . '/v1/rate/job/bulk-update',
+        //         [
+        //             'form_params' => $data, // Use form_params for x-www-form-urlencoded
+        //         ]
+        //     );    
+        //     if ($pricingReq->failed()) {
+        //         Log::error($pricingReq->body());
+        //         throw new \Exception("HTTP Request failed with status code: " . $pricingReq->status());
+        //     }
+        //     $result = json_decode($pricingReq->getBody());
+        //     return $result->data;
+        // } catch (RequestException $ex) {
+        //     return json_decode($ex->getBody());
+        // }
+
+
+        // Data to be sent in the request
         $data = [
-            'headers' => [
-                'Authorization' => 'Bearer ' .$token,
-                "Content-Type" => 'application/json',
-                "accept" => 'application/json',
-            ],
-            "json" => [
-                "entity_id" => 1,
-                "entity_type" => "ADMIN",
-                "upload_file_url" => $url,
-                "effective_date" => $effective_date,
-            ],
+            "entity_id" => 1,
+            "entity_type" => "ADMIN",
+            "upload_file_url" => $url,
+            "effective_date" => "",
         ];
-        try {
-            $pricingReq = HTTP::post(
-                env('PRICINGSVC_HOST') . '/v1/rate/job/bulk-update',
-                $data
-            );    
-            if ($pricingReq->failed()) {
-                Log::error($pricingReq->body());
-                throw new \Exception("HTTP Request failed with status code: " . $pricingReq->status());
-            }
-            $result = json_decode($pricingReq->getBody());
-            return $result->data;
-        } catch (RequestException $ex) {
-            return json_decode($ex->getBody());
+
+        // Build the query string from the data array
+        $data = json_encode($data);
+
+        // The URL for the API endpoint
+        $url = env('PRICINGSVC_HOST') . '/v1/rate/job/bulk-update';
+
+        // cURL initialization
+        $ch = curl_init($url);
+
+        // Set cURL options
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);  // Return the response as a string
+        curl_setopt($ch, CURLOPT_POST, true);            // Specify that it's a POST request
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $data);  // Set the form data as POST fields
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Accept: application/json',   // Accept header
+            'Authorization: Bearer ' . $token,   // Authorization header
+            'Content-Type: application/json'   // Content type header
+        ]);
+
+        // Execute the cURL request
+        $response = curl_exec($ch);
+
+        // Check for errors
+        if ($response === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            Log::error("cURL Error: " . $error);
+            throw new \Exception("cURL Error: " . $error);
         }
+
+        // Check the HTTP status code of the response
+        $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        // Close the cURL session
+        curl_close($ch);
+
+        // If the request failed, log the error and throw an exception
+        if ($statusCode >= 300) {
+            Log::error("HTTP Request failed with status code: " . $statusCode . " and response: " . $response);
+            throw new \Exception("HTTP Request failed with status code: " . $statusCode);
+        }
+
+        // Log the response
+        // Log::info("HTTP Request succeeded with response: " . $response);
+
+        // Return or process the response as needed
+        return (object) json_decode($response,true);
+
     }
 }

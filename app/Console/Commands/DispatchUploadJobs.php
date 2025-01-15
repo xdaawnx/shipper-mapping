@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
 use App\Jobs\UploadFilesJob as Job;
+use Illuminate\Support\Facades\Log;
 // use Illuminate\Support\Facades\Cache;
 // use Illuminate\Support\Facades\Http;
 
@@ -28,9 +29,11 @@ class DispatchUploadJobs extends Command
     /**
      * Execute the console command.
      */
+    private $dir = "Sicepat2025";
+    
     public function handle()
     {   
-        $files = collect(scandir(Storage::path('/docs/output/20241126/')))
+        $files = collect(scandir(Storage::path("/docs/output/{$this->dir}/")))
             ->filter(fn ($file) => str_ends_with($file, '.csv'))
             ->values();
 
@@ -43,8 +46,11 @@ class DispatchUploadJobs extends Command
         //     return;
         // }
 
-        $batches = $remainingFiles->chunk(2);
-
+        $batches = $remainingFiles->chunk(1);
+        if (count($batches) == 0) {
+            return Log::info('No file to upload');
+            
+        }
         for ($i = 0; $i < 1; $i++) {
             $batch = $batches->shift();
             if (!$batch) break;
@@ -56,8 +62,6 @@ class DispatchUploadJobs extends Command
 
             Job::dispatch($batch->toArray());
         }
-        $this->info('Dispatched upload jobs successfully.');
+        Log::info('Dispatched upload jobs successfully.');
     }
-   
-
 }
